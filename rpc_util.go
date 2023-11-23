@@ -160,6 +160,7 @@ type callInfo struct {
 	codec                 baseCodec
 	maxRetryRPCBufferSize int
 	onFinish              []func(err error)
+	syncSend              bool
 }
 
 func defaultCallInfo() *callInfo {
@@ -295,6 +296,27 @@ func (o FailFastCallOption) before(c *callInfo) error {
 	return nil
 }
 func (o FailFastCallOption) after(c *callInfo, attempt *csAttempt) {}
+
+// SyncSend returns a CallOption that enables synchronous message sending
+// for spawned streams: the call will block until the message is completely
+// written to the underlying connection.
+//
+// # Experimental
+//
+// Notice: This API is EXPERIMENTAL and may be changed or removed in a
+// later release.
+func SyncSend() CallOption {
+	return syncSend{}
+}
+
+type syncSend struct{}
+
+func (o syncSend) before(c *callInfo) error {
+	c.syncSend = true
+	return nil
+}
+
+func (o syncSend) after(c *callInfo, attempt *csAttempt) {}
 
 // OnFinish returns a CallOption that configures a callback to be called when
 // the call completes. The error passed to the callback is the status of the

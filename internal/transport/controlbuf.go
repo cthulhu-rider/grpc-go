@@ -152,6 +152,8 @@ type dataFrame struct {
 	// onEachWrite is called every time
 	// a part of d is written out.
 	onEachWrite func()
+	// if onWriteFin is set, it is called when h and d are completely written out
+	onWriteFin func()
 }
 
 func (*dataFrame) isTransportResponseFrame() bool { return false }
@@ -981,6 +983,9 @@ func (l *loopyWriter) processData() (bool, error) {
 
 	if len(dataItem.h) == 0 && len(dataItem.d) == 0 { // All the data from that message was written out.
 		str.itl.dequeue()
+		if dataItem.onWriteFin != nil {
+			dataItem.onWriteFin()
+		}
 	}
 	if str.itl.isEmpty() {
 		str.state = empty

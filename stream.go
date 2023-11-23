@@ -331,6 +331,9 @@ func newClientStreamWithParams(ctx context.Context, desc *StreamDesc, cc *Client
 		firstAttempt: true,
 		onCommit:     onCommit,
 	}
+	if c.syncSend {
+		cs.chOnFullWireSend = make(chan struct{}, 1)
+	}
 	if !cc.dopts.disableRetry {
 		cs.retryThrottler = cc.retryThrottler.Load().(*retryThrottler)
 	}
@@ -568,6 +571,10 @@ type clientStream struct {
 	onCommit   func()
 	buffer     []func(a *csAttempt) error // operations to replay on retry
 	bufferSize int                        // current size of buffer
+
+	// if set, chOnFullWireSend will be used to sync message writing to the
+	// underlying connection
+	chOnFullWireSend chan struct{}
 }
 
 // csAttempt implements a single transport stream attempt within a
@@ -911,6 +918,13 @@ func (cs *clientStream) SendMsg(m any) (err error) {
 			binlog.Log(cs.ctx, cm)
 		}
 	}
+	if err == nil && cs.chOnFullWireSend != nil {
+		select {
+		case <-cs.ctx.Done():
+			return cs.ctx.Err()
+		case <-cs.chOnFullWireSend:
+		}
+	}
 	return err
 }
 
@@ -1041,7 +1055,13 @@ func (a *csAttempt) sendMsg(m any, hdr, payld, data []byte) error {
 		}
 		a.mu.Unlock()
 	}
-	if err := a.t.Write(a.s, hdr, payld, &transport.Options{Last: !cs.desc.ClientStreams}); err != nil {
+	transportOpts := &transport.Options{
+		Last: !cs.desc.ClientStreams,
+	}
+	if a.cs.chOnFullWireSend != nil {
+		transportOpts.OnFullWireWrite = func() { a.cs.chOnFullWireSend <- struct{}{} }
+	}
+	if err := a.t.Write(a.s, hdr, payld, transportOpts); err != nil {
 		if !cs.desc.ClientStreams {
 			// For non-client-streaming RPCs, we return nil instead of EOF on error
 			// because the generated code requires it.  finish is not called; RecvMsg()

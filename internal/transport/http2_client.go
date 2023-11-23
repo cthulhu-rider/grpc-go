@@ -1042,6 +1042,8 @@ func (t *http2Client) Write(s *Stream, hdr []byte, data []byte, opts *Options) e
 		endStream: opts.Last,
 		h:         hdr,
 		d:         data,
+		// will be called when data is written out to the http2Client.conn
+		onWriteFin: opts.OnFullWireWrite,
 	}
 	if hdr != nil || data != nil { // If it's not an empty data frame, check quota.
 		if err := s.wq.get(int32(len(hdr) + len(data))); err != nil {

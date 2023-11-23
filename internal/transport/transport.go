@@ -607,6 +607,10 @@ type Options struct {
 	// Last indicates whether this write is the last piece for
 	// this stream.
 	Last bool
+
+	// OnFullWireWrite is called when data is written out to the underlying
+	// communication channel. Supported by [ClientTransport] only.
+	OnFullWireWrite func()
 }
 
 // CallHdr carries the information of a particular RPC.
@@ -706,6 +710,7 @@ type ServerTransport interface {
 
 	// Write sends the data for the given stream.
 	// Write may not be called on all streams.
+	// Ignores [Options.OnFullWireWrite].
 	Write(s *Stream, hdr []byte, data []byte, opts *Options) error
 
 	// WriteStatus sends the status of a stream to the client.  WriteStatus is
