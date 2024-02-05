@@ -504,6 +504,21 @@ func (s *Stream) Read(p []byte) (n int, err error) {
 	return io.ReadFull(s.trReader, p)
 }
 
+type streamReader Stream
+
+func (x *streamReader) Read(p []byte) (n int, err error) {
+	// Don't request a read if there was an error earlier
+	if er := x.trReader.(*transportReader).er; er != nil {
+		return 0, er
+	}
+	return x.trReader.Read(p)
+}
+
+func MessageStreamReader(s *Stream, sz int) io.Reader {
+	s.requestRead(sz)
+	return (*streamReader)(s)
+}
+
 // tranportReader reads all the data available for this Stream from the transport and
 // passes them into the decoder, which converts them into a gRPC message stream.
 // The error is io.EOF when the stream is done or another non-nil error if
@@ -651,6 +666,12 @@ type CallHdr struct {
 	DoneFunc func() // called when the stream is finished
 }
 
+type DataReader struct {
+	R     io.Reader
+	Size  int
+	OnErr func(err error)
+}
+
 // ClientTransport is the common interface for all gRPC client-side transport
 // implementations.
 type ClientTransport interface {
@@ -668,7 +689,9 @@ type ClientTransport interface {
 
 	// Write sends the data for the given stream. A nil stream indicates
 	// the write is to be performed on the transport as a whole.
-	Write(s *Stream, hdr []byte, data []byte, opts *Options) error
+	//
+	// The data must be either []byte, nil or DataReader.
+	Write(s *Stream, hdr []byte, data any, opts *Options) error
 
 	// NewStream creates a Stream for an RPC.
 	NewStream(ctx context.Context, callHdr *CallHdr) (*Stream, error)

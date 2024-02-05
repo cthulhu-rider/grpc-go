@@ -597,23 +597,12 @@ type parser struct {
 // that the underlying io.Reader must not return an incompatible
 // error.
 func (p *parser) recvMsg(maxReceiveMessageSize int) (pf payloadFormat, msg []byte, err error) {
-	if _, err := p.r.Read(p.header[:]); err != nil {
+	pf, length, err := readLimitedSizeHeader(p.r, p.header[:], maxReceiveMessageSize)
+	if err != nil {
 		return 0, nil, err
 	}
 
-	pf = payloadFormat(p.header[0])
-	length := binary.BigEndian.Uint32(p.header[1:])
-
-	if length == 0 {
-		return pf, nil, nil
-	}
-	if int64(length) > int64(maxInt) {
-		return 0, nil, status.Errorf(codes.ResourceExhausted, "grpc: received message larger than max length allowed on current machine (%d vs. %d)", length, maxInt)
-	}
-	if int(length) > maxReceiveMessageSize {
-		return 0, nil, status.Errorf(codes.ResourceExhausted, "grpc: received message larger than max (%d vs. %d)", length, maxReceiveMessageSize)
-	}
-	msg = p.recvBufferPool.Get(int(length))
+	msg = p.recvBufferPool.Get(length)
 	if _, err := p.r.Read(msg); err != nil {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
@@ -621,6 +610,32 @@ func (p *parser) recvMsg(maxReceiveMessageSize int) (pf payloadFormat, msg []byt
 		return 0, nil, err
 	}
 	return pf, msg, nil
+}
+
+// buf must be at least 5B.
+func readLimitedSizeHeader(r io.Reader, buf []byte, maxMsgSize int) (payloadFormat, int, error) {
+	pf, ln, err := readHeader(r, buf)
+	if err == nil && ln > maxMsgSize {
+		err = status.Errorf(codes.ResourceExhausted, "grpc: received message larger than max (%d vs. %d)", ln, maxMsgSize)
+	}
+	return pf, ln, err
+}
+
+// buf must be at least 5B.
+func readHeader(r io.Reader, buf []byte) (payloadFormat, int, error) {
+	if len(buf) < 5 {
+		// https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md
+		panic(fmt.Sprintf("too short buffer of size %d", len(buf)))
+	}
+	// p.r is transport.Stream that works like io.ReadFull, so one time Read
+	if _, err := r.Read(buf); err != nil {
+		return 0, 0, err
+	}
+	length := binary.BigEndian.Uint32(buf[payloadLen:])
+	if int64(length) > int64(maxInt) {
+		return 0, 0, status.Errorf(codes.ResourceExhausted, "grpc: received message larger than max length allowed on current machine (%d vs. %d)", length, maxInt)
+	}
+	return payloadFormat(buf[0]), int(length), nil
 }
 
 // encode serializes msg and returns a buffer containing the message, or an

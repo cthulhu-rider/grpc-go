@@ -20,6 +20,7 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -1031,7 +1032,7 @@ func (t *http2Client) GracefulClose() {
 
 // Write formats the data into HTTP2 data frame(s) and sends it out. The caller
 // should proceed only if Write returns nil.
-func (t *http2Client) Write(s *Stream, hdr []byte, data []byte, opts *Options) error {
+func (t *http2Client) Write(s *Stream, hdr []byte, data any, opts *Options) error {
 	if opts.Last {
 		// If it's the last message, update stream state.
 		if !s.compareAndSwapState(streamActive, streamWriteDone) {
@@ -1044,10 +1045,33 @@ func (t *http2Client) Write(s *Stream, hdr []byte, data []byte, opts *Options) e
 		streamID:  s.id,
 		endStream: opts.Last,
 		h:         hdr,
-		d:         data,
+	}
+	var dataSize int
+	switch d := data.(type) {
+	default:
+		return fmt.Errorf("invalid data type %T", data)
+	case nil:
+	case []byte:
+		df.d = d
+		dataSize = len(d)
+	case DataReader:
+		if !opts.Last {
+			return errors.New("DataReader must be used with Options.Last only")
+		}
+		if d.Size > 0 {
+			dataSize = d.Size
+			df.ds = d.Size
+			df.dr = d.R
+			df.de = d.OnErr
+			fbs := len(df.h) + df.ds
+			if fbs > http2MaxFrameLen {
+				fbs = http2MaxFrameLen
+			}
+			df.fb = make([]byte, fbs)
+		}
 	}
 	if hdr != nil || data != nil { // If it's not an empty data frame, check quota.
-		if err := s.wq.get(int32(len(hdr) + len(data))); err != nil {
+		if err := s.wq.get(int32(len(hdr) + dataSize)); err != nil {
 			return err
 		}
 	}

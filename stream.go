@@ -20,6 +20,7 @@ package grpc
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"math"
@@ -85,6 +86,11 @@ type Stream interface {
 	RecvMsg(m any) error
 }
 
+type DataReader struct {
+	R    io.Reader
+	Size int
+}
+
 // ClientStream defines the client-side behavior of a streaming RPC.
 //
 // All errors returned from ClientStream methods are compatible with the
@@ -129,6 +135,10 @@ type ClientStream interface {
 	//
 	// It is not safe to modify the message after calling SendMsg. Tracing
 	// libraries and stats handlers may use the message lazily.
+	//
+	// If m is DataReader, the size of the message should be pre-calculated by the
+	// caller as DataReader.Size and DataReader.R must have at least DataReader.Size
+	// bytes.
 	SendMsg(m any) error
 	// RecvMsg blocks until it receives a message into m or the stream is
 	// done. It returns io.EOF when the stream completes successfully. On
@@ -888,16 +898,32 @@ func (cs *clientStream) SendMsg(m any) (err error) {
 		cs.sentLast = true
 	}
 
-	// load hdr, payload, data
-	hdr, payload, data, err := prepareMsg(m, cs.codec, cs.cp, cs.comp)
-	if err != nil {
-		return err
+	var hdr, payload, data []byte
+	dr, ok := m.(DataReader)
+	if ok {
+		if cs.desc.ClientStreams || cs.desc.ServerStreams {
+			return status.Errorf(codes.Internal, "DataReader message must not be used with streaming RPC")
+		}
+		// TODO(dfawley): should we be checking len(data) instead?
+		if dr.Size > *cs.callInfo.maxSendMessageSize {
+			return status.Errorf(codes.ResourceExhausted, "trying to send message larger than max (%d vs. %d)", len(payload), *cs.callInfo.maxSendMessageSize)
+		}
+		var h [headerLen]byte
+		h[0] = byte(compressionNone)
+		binary.BigEndian.PutUint32(h[payloadLen:], uint32(dr.Size)) // FIXME: check casts
+		hdr = h[:]
+	} else {
+		// load hdr, payload, data
+		hdr, payload, data, err = prepareMsg(m, cs.codec, cs.cp, cs.comp)
+		if err != nil {
+			return err
+		}
+		// TODO(dfawley): should we be checking len(data) instead?
+		if len(payload) > *cs.callInfo.maxSendMessageSize {
+			return status.Errorf(codes.ResourceExhausted, "trying to send message larger than max (%d vs. %d)", len(payload), *cs.callInfo.maxSendMessageSize)
+		}
 	}
 
-	// TODO(dfawley): should we be checking len(data) instead?
-	if len(payload) > *cs.callInfo.maxSendMessageSize {
-		return status.Errorf(codes.ResourceExhausted, "trying to send message larger than max (%d vs. %d)", len(payload), *cs.callInfo.maxSendMessageSize)
-	}
 	op := func(a *csAttempt) error {
 		return a.sendMsg(m, hdr, payload, data)
 	}
@@ -1041,7 +1067,20 @@ func (a *csAttempt) sendMsg(m any, hdr, payld, data []byte) error {
 		}
 		a.mu.Unlock()
 	}
-	if err := a.t.Write(a.s, hdr, payld, &transport.Options{Last: !cs.desc.ClientStreams}); err != nil {
+	var d any = payld
+	dr, ok := m.(DataReader)
+	var re error
+	if ok {
+		d = transport.DataReader{
+			R:    dr.R,
+			Size: dr.Size,
+			OnErr: func(err error) {
+				re = err
+				a.cs.finish(err)
+			},
+		}
+	}
+	if err := a.t.Write(a.s, hdr, d, &transport.Options{Last: !cs.desc.ClientStreams}); err != nil {
 		if !cs.desc.ClientStreams {
 			// For non-client-streaming RPCs, we return nil instead of EOF on error
 			// because the generated code requires it.  finish is not called; RecvMsg()
@@ -1050,8 +1089,13 @@ func (a *csAttempt) sendMsg(m any, hdr, payld, data []byte) error {
 		}
 		return io.EOF
 	}
-	for _, sh := range a.statsHandlers {
-		sh.HandleRPC(a.ctx, outPayload(true, m, data, payld, time.Now()))
+	if re != nil {
+		return re
+	}
+	if !ok {
+		for _, sh := range a.statsHandlers {
+			sh.HandleRPC(a.ctx, outPayload(true, m, data, payld, time.Now()))
+		}
 	}
 	if channelz.IsOn() {
 		a.t.IncrMsgSent()

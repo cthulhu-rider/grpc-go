@@ -97,6 +97,9 @@ type methodHandler func(srv any, ctx context.Context, dec func(any) error, inter
 type MethodDesc struct {
 	MethodName string
 	Handler    methodHandler
+	// TODO: docs
+	// TODO: pass compression flag
+	BinHandler func(ctx context.Context, ln int, r io.Reader) (any, error)
 }
 
 // ServiceDesc represents an RPC service's specification.
@@ -1292,7 +1295,7 @@ func (s *Server) processUnaryRPC(ctx context.Context, t transport.ServerTranspor
 
 	// If dc is set and matches the stream's compression, use it.  Otherwise, try
 	// to find a matching registered compressor for decomp.
-	if rc := stream.RecvCompress(); s.opts.dc != nil && s.opts.dc.Type() == rc {
+	if rc := stream.RecvCompress(); md.BinHandler == nil && s.opts.dc != nil && s.opts.dc.Type() == rc {
 		dc = s.opts.dc
 	} else if rc != "" && rc != encoding.Identity {
 		decomp = encoding.GetCompressor(rc)
@@ -1322,6 +1325,87 @@ func (s *Server) processUnaryRPC(ctx context.Context, t transport.ServerTranspor
 		if err := stream.SetSendCompress(sendCompressorName); err != nil {
 			return status.Errorf(codes.Internal, "grpc: failed to set send compressor: %v", err)
 		}
+	}
+
+	if md.BinHandler != nil {
+		var hdr [5]byte
+		payloadFmt, length, err := readHeader(stream, hdr[:])
+		if err != nil {
+			t.WriteStatus(stream, status.Convert(err))
+			return err
+		}
+
+		r := io.LimitReader(transport.MessageStreamReader(stream, length), int64(length))
+		switch payloadFmt {
+		default:
+			st := status.Newf(codes.Internal, "grpc: received unexpected payload format %d", payloadFmt)
+			t.WriteStatus(stream, st)
+			return st.Err()
+		case compressionNone:
+		case compressionMade:
+			compAlgo := stream.RecvCompress()
+			if compAlgo == "" || compAlgo == encoding.Identity {
+				st := status.New(codes.Internal, "grpc: compressed flag set with identity or empty encoding")
+				t.WriteStatus(stream, st)
+				return st.Err()
+			}
+			if decomp == nil {
+				// deprecated dc not supported, see above
+				st := status.Newf(codes.Unimplemented, "grpc: Decompressor is not installed for grpc-encoding %q", compAlgo)
+				t.WriteStatus(stream, st)
+				return st.Err()
+			}
+			r, err = decomp.Decompress(r)
+			if err != nil {
+				st := status.Newf(codes.Internal, "grpc: failed to decompress the received message: %v", err)
+				t.WriteStatus(stream, st)
+				return st.Err()
+			}
+			// TODO: s.opts.maxReceiveMessageSize
+		}
+
+		ctx = NewContextWithServerTransportStream(ctx, stream)
+		resp, appErr := md.BinHandler(ctx, length, r)
+		// TODO: define common errors for incorrect format to return such errors in the
+		//  usual form
+		if appErr != nil {
+			appStatus, ok := status.FromError(appErr)
+			if !ok {
+				// Convert non-status application error to a status error with code
+				// Unknown, but handle context errors specifically.
+				appStatus = status.FromContextError(appErr)
+				appErr = appStatus.Err()
+			}
+			t.WriteStatus(stream, appStatus)
+			return appErr
+		}
+
+		opts := &transport.Options{Last: true}
+		// Server handler could have set new compressor by calling SetSendCompressor.
+		// In case it is set, we need to use it for compressing outbound message.
+		if stream.SendCompress() != sendCompressorName {
+			comp = encoding.GetCompressor(stream.SendCompress())
+		}
+		if err := s.sendResponse(ctx, t, stream, resp, cp, opts, comp); err != nil {
+			if err == io.EOF {
+				// The entire stream is done (for unary RPC only).
+				return err
+			}
+			if sts, ok := status.FromError(err); ok {
+				if e := t.WriteStatus(stream, sts); e != nil {
+					channelz.Warningf(logger, s.channelzID, "grpc: Server.processUnaryRPC failed to write status: %v", e)
+				}
+			} else {
+				switch st := err.(type) {
+				case transport.ConnectionError:
+					// Nothing to do here.
+				default:
+					panic(fmt.Sprintf("grpc: Unexpected error (%T) from sendResponse: %v", st, st))
+				}
+			}
+			return err
+		}
+		return t.WriteStatus(stream, statusOK)
 	}
 
 	var payInfo *payloadInfo

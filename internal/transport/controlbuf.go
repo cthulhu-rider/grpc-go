@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"runtime"
 	"strconv"
@@ -149,6 +150,13 @@ type dataFrame struct {
 	endStream bool
 	h         []byte
 	d         []byte
+
+	// d substitutes
+	dr io.Reader
+	ds int             // len(d) but for dr
+	de func(err error) // called on dr error
+	fb []byte          // frame buffer of http2MaxFrameLen
+
 	// onEachWrite is called every time
 	// a part of d is written out.
 	onEachWrite func()
@@ -906,8 +914,13 @@ func (l *loopyWriter) processData() (bool, error) {
 	// Every dataFrame has two buffers; h that keeps grpc-message header and d that is actual data.
 	// As an optimization to keep wire traffic low, data from d is copied to h to make as big as the
 	// maximum possible HTTP2 frame size.
-
-	if len(dataItem.h) == 0 && len(dataItem.d) == 0 { // Empty data frame
+	var dSizeInit int
+	if dataItem.ds > 0 {
+		dSizeInit = dataItem.ds
+	} else {
+		dSizeInit = len(dataItem.d)
+	}
+	if len(dataItem.h) == 0 && dSizeInit == 0 { // Empty data frame
 		// Client sends out empty data frame with endStream = true
 		if err := l.framer.fr.WriteData(dataItem.streamID, dataItem.endStream, nil); err != nil {
 			return false, err
@@ -943,20 +956,41 @@ func (l *loopyWriter) processData() (bool, error) {
 	}
 	// Compute how much of the header and data we can send within quota and max frame length
 	hSize := min(maxSize, len(dataItem.h))
-	dSize := min(maxSize-hSize, len(dataItem.d))
+	dSize := min(maxSize-hSize, dSizeInit)
 	if hSize != 0 {
 		if dSize == 0 {
 			buf = dataItem.h
 		} else {
 			// We can add some data to grpc message header to distribute bytes more equally across frames.
-			// Copy on the stack to avoid generating garbage
-			var localBuf [http2MaxFrameLen]byte
-			copy(localBuf[:hSize], dataItem.h)
-			copy(localBuf[hSize:], dataItem.d[:dSize])
-			buf = localBuf[:hSize+dSize]
+			if dataItem.ds > 0 {
+				_, err := io.ReadFull(dataItem.dr, dataItem.fb[hSize:hSize+dSize])
+				if err != nil {
+					// FIXME: dequeue?
+					dataItem.de(err)
+					return false, nil
+				}
+				copy(dataItem.fb[:hSize], dataItem.h)
+				buf = dataItem.fb[:hSize+dSize]
+			} else {
+				// Copy on the stack to avoid generating garbage
+				var localBuf [http2MaxFrameLen]byte
+				copy(localBuf[:hSize], dataItem.h)
+				copy(localBuf[hSize:], dataItem.d[:dSize])
+				buf = localBuf[:hSize+dSize]
+			}
 		}
 	} else {
-		buf = dataItem.d
+		if dataItem.ds > 0 {
+			_, err := io.ReadFull(dataItem.dr, dataItem.fb[:dSize])
+			if err != nil {
+				// FIXME: dequeue?
+				dataItem.de(err)
+				return false, nil
+			}
+			buf = dataItem.fb[:dSize]
+		} else {
+			buf = dataItem.d
+		}
 	}
 
 	size := hSize + dSize
@@ -965,7 +999,7 @@ func (l *loopyWriter) processData() (bool, error) {
 	str.wq.replenish(size)
 	var endStream bool
 	// If this is the last data message on this stream and all of it can be written in this iteration.
-	if dataItem.endStream && len(dataItem.h)+len(dataItem.d) <= size {
+	if dataItem.endStream && len(dataItem.h)+dSizeInit <= size {
 		endStream = true
 	}
 	if dataItem.onEachWrite != nil {
@@ -977,9 +1011,15 @@ func (l *loopyWriter) processData() (bool, error) {
 	str.bytesOutStanding += size
 	l.sendQuota -= uint32(size)
 	dataItem.h = dataItem.h[hSize:]
-	dataItem.d = dataItem.d[dSize:]
+	if dataItem.ds > 0 {
+		dataItem.ds -= dSize
+		dSize = dataItem.ds
+	} else {
+		dataItem.d = dataItem.d[dSize:]
+		dSize = len(dataItem.d)
+	}
 
-	if len(dataItem.h) == 0 && len(dataItem.d) == 0 { // All the data from that message was written out.
+	if len(dataItem.h) == 0 && dSize == 0 { // All the data from that message was written out.
 		str.itl.dequeue()
 	}
 	if str.itl.isEmpty() {
