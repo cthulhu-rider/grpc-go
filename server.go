@@ -145,44 +145,44 @@ type Server struct {
 }
 
 type serverOptions struct {
-	creds                 credentials.TransportCredentials
-	codec                 baseCodec
-	cp                    Compressor
-	dc                    Decompressor
-	unaryInt              UnaryServerInterceptor
-	streamInt             StreamServerInterceptor
-	chainUnaryInts        []UnaryServerInterceptor
-	chainStreamInts       []StreamServerInterceptor
-	binaryLogger          binarylog.Logger
-	inTapHandle           tap.ServerInHandle
-	statsHandlers         []stats.Handler
-	maxConcurrentStreams  uint32
-	maxReceiveMessageSize int
-	maxSendMessageSize    int
-	unknownStreamDesc     *StreamDesc
-	keepaliveParams       keepalive.ServerParameters
-	keepalivePolicy       keepalive.EnforcementPolicy
-	initialWindowSize     int32
-	initialConnWindowSize int32
-	writeBufferSize       int
-	readBufferSize        int
-	sharedWriteBuffer     bool
-	connectionTimeout     time.Duration
-	maxHeaderListSize     *uint32
-	headerTableSize       *uint32
-	numServerWorkers      uint32
-	recvBufferPool        SharedBufferPool
-	waitForHandlers       bool
+	creds                     credentials.TransportCredentials
+	codec                     baseCodec
+	cp                        Compressor
+	dc                        Decompressor
+	unaryInt                  UnaryServerInterceptor
+	streamInt                 StreamServerInterceptor
+	chainUnaryInts            []UnaryServerInterceptor
+	chainStreamInts           []StreamServerInterceptor
+	binaryLogger              binarylog.Logger
+	inTapHandle               tap.ServerInHandle
+	statsHandlers             []stats.Handler
+	maxConcurrentStreams      uint32
+	maxReceiveMessageSizeFunc func() int
+	maxSendMessageSize        int
+	unknownStreamDesc         *StreamDesc
+	keepaliveParams           keepalive.ServerParameters
+	keepalivePolicy           keepalive.EnforcementPolicy
+	initialWindowSize         int32
+	initialConnWindowSize     int32
+	writeBufferSize           int
+	readBufferSize            int
+	sharedWriteBuffer         bool
+	connectionTimeout         time.Duration
+	maxHeaderListSize         *uint32
+	headerTableSize           *uint32
+	numServerWorkers          uint32
+	recvBufferPool            SharedBufferPool
+	waitForHandlers           bool
 }
 
 var defaultServerOptions = serverOptions{
-	maxConcurrentStreams:  math.MaxUint32,
-	maxReceiveMessageSize: defaultServerMaxReceiveMessageSize,
-	maxSendMessageSize:    defaultServerMaxSendMessageSize,
-	connectionTimeout:     120 * time.Second,
-	writeBufferSize:       defaultWriteBufSize,
-	readBufferSize:        defaultReadBufSize,
-	recvBufferPool:        nopBufferPool{},
+	maxConcurrentStreams:      math.MaxUint32,
+	maxReceiveMessageSizeFunc: func() int { return defaultServerMaxReceiveMessageSize },
+	maxSendMessageSize:        defaultServerMaxSendMessageSize,
+	connectionTimeout:         120 * time.Second,
+	writeBufferSize:           defaultWriteBufSize,
+	readBufferSize:            defaultReadBufSize,
+	recvBufferPool:            nopBufferPool{},
 }
 var globalServerOptions []ServerOption
 
@@ -384,10 +384,17 @@ func MaxMsgSize(m int) ServerOption {
 }
 
 // MaxRecvMsgSize returns a ServerOption to set the max message size in bytes the server can receive.
-// If this is not set, gRPC uses the default 4MB.
+// If this is not set, gRPC uses the default 4MB. Overlaps [MaxRecvMsgSizeFunc].
 func MaxRecvMsgSize(m int) ServerOption {
+	return MaxRecvMsgSizeFunc(func() int { return m })
+}
+
+// MaxRecvMsgSizeFunc returns a ServerOption to set the dynamic max message size
+// in bytes the server can receive. If this is not set, gRPC uses the default
+// 4MB. Overlaps [MaxRecvMsgSize].
+func MaxRecvMsgSizeFunc(f func() int) ServerOption {
 	return newFuncServerOption(func(o *serverOptions) {
-		o.maxReceiveMessageSize = m
+		o.maxReceiveMessageSizeFunc = f
 	})
 }
 
@@ -1342,7 +1349,7 @@ func (s *Server) processUnaryRPC(ctx context.Context, t transport.ServerTranspor
 	if len(shs) != 0 || len(binlogs) != 0 {
 		payInfo = &payloadInfo{}
 	}
-	d, err := recvAndDecompress(&parser{r: stream, recvBufferPool: s.opts.recvBufferPool}, stream, dc, s.opts.maxReceiveMessageSize, payInfo, decomp)
+	d, err := recvAndDecompress(&parser{r: stream, recvBufferPool: s.opts.recvBufferPool}, stream, dc, s.opts.maxReceiveMessageSizeFunc(), payInfo, decomp)
 	if err != nil {
 		if e := t.WriteStatus(stream, status.Convert(err)); e != nil {
 			channelz.Warningf(logger, s.channelzID, "grpc: Server.processUnaryRPC failed to write status: %v", e)
@@ -1554,7 +1561,7 @@ func (s *Server) processStreamingRPC(ctx context.Context, t transport.ServerTran
 		s:                     stream,
 		p:                     &parser{r: stream, recvBufferPool: s.opts.recvBufferPool},
 		codec:                 s.getCodec(stream.ContentSubtype()),
-		maxReceiveMessageSize: s.opts.maxReceiveMessageSize,
+		maxReceiveMessageSize: s.opts.maxReceiveMessageSizeFunc(),
 		maxSendMessageSize:    s.opts.maxSendMessageSize,
 		trInfo:                trInfo,
 		statsHandler:          shs,

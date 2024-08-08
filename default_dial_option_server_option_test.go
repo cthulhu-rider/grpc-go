@@ -87,8 +87,8 @@ func (s) TestAddGlobalServerOptions(t *testing.T) {
 
 	// Ensure the extra server options applies to new servers
 	s := NewServer()
-	if s.opts.maxReceiveMessageSize != maxRecvSize {
-		t.Fatalf("Unexpected s.opts.maxReceiveMessageSize: %d != %d", s.opts.maxReceiveMessageSize, maxRecvSize)
+	if s.opts.maxReceiveMessageSizeFunc() != maxRecvSize {
+		t.Fatalf("Unexpected s.opts.maxReceiveMessageSize: %d != %d", s.opts.maxReceiveMessageSizeFunc(), maxRecvSize)
 	}
 
 	internal.ClearGlobalServerOptions()
@@ -125,8 +125,8 @@ func (s) TestJoinServerOption(t *testing.T) {
 	const initialWindowSize = 100
 	jso := newJoinServerOption(Creds(insecure.NewCredentials()), MaxRecvMsgSize(maxRecvSize), InitialWindowSize(initialWindowSize))
 	s := NewServer(jso)
-	if s.opts.maxReceiveMessageSize != maxRecvSize {
-		t.Fatalf("Unexpected s.opts.maxReceiveMessageSize: %d != %d", s.opts.maxReceiveMessageSize, maxRecvSize)
+	if s.opts.maxReceiveMessageSizeFunc() != maxRecvSize {
+		t.Fatalf("Unexpected s.opts.maxReceiveMessageSize: %d != %d", s.opts.maxReceiveMessageSizeFunc(), maxRecvSize)
 	}
 	if s.opts.initialWindowSize != initialWindowSize {
 		t.Fatalf("Unexpected s.opts.initialWindowSize: %d != %d", s.opts.initialWindowSize, initialWindowSize)
