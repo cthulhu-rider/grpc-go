@@ -129,6 +129,7 @@ func (dcs *defaultConfigSelector) SelectConfig(rpcInfo iresolver.RPCInfo) (*ires
 // WithReturnConnectionError, and FailOnNonTempDialError are ignored by this
 // function.
 func NewClient(target string, opts ...DialOption) (conn *ClientConn, err error) {
+	fmt.Println("CCCCCCCCCCCCCCCCCCCCCCCCCCCC")
 	cc := &ClientConn{
 		target: target,
 		conns:  make(map[*addrConn]struct{}),

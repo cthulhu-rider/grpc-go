@@ -32,7 +32,7 @@ var (
 	// DefaultPriorityInitTimeout is the timeout after which if a priority is
 	// not READY, the next will be started. It's exported to be overridden by
 	// tests.
-	DefaultPriorityInitTimeout = 10 * time.Second
+	DefaultPriorityInitTimeout = 6 * time.Second
 )
 
 // syncPriority handles priority after a config update or a child balancer

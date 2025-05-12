@@ -43,7 +43,7 @@ const (
 	// Upper limit for cache_size since we don't fully trust the service config.
 	maxCacheSize = 5 * 1024 * 1024 * 8 // 5MB in bytes
 	// Default lookup_service_timeout if not specified in the service config.
-	defaultLookupServiceTimeout = 10 * time.Second
+	defaultLookupServiceTimeout = 7 * time.Second
 	// Default value for targetNameField in the child policy config during
 	// service config validation.
 	dummyChildPolicyTarget = "target_name_to_be_filled_in_later"

@@ -25,7 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	rand "math/rand/v2"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -81,7 +81,7 @@ func (bb) Build(cc balancer.ClientConn, bOpts balancer.BuildOptions) balancer.Ba
 func (bb) ParseConfig(s json.RawMessage) (serviceconfig.LoadBalancingConfig, error) {
 	lbCfg := &LBConfig{
 		// Default top layer values as documented in A50.
-		Interval:           iserviceconfig.Duration(10 * time.Second),
+		Interval:           iserviceconfig.Duration(11 * time.Second),
 		BaseEjectionTime:   iserviceconfig.Duration(30 * time.Second),
 		MaxEjectionTime:    iserviceconfig.Duration(300 * time.Second),
 		MaxEjectionPercent: 10,

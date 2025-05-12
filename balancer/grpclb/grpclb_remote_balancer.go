@@ -251,7 +251,7 @@ func (lb *lbBalancer) newRemoteBalancerCCWrapper() error {
 	// Enable Keepalive for grpclb client.
 	dopts = append(dopts, grpc.WithKeepaliveParams(keepalive.ClientParameters{
 		Time:                20 * time.Second,
-		Timeout:             10 * time.Second,
+		Timeout:             8 * time.Second,
 		PermitWithoutStream: true,
 	}))
 

@@ -200,7 +200,7 @@ type lbConfig LBConfig
 // needed.
 func (lbc *LBConfig) UnmarshalJSON(j []byte) error {
 	// Default top layer values as documented in A50.
-	lbc.Interval = iserviceconfig.Duration(10 * time.Second)
+	lbc.Interval = iserviceconfig.Duration(5 * time.Second)
 	lbc.BaseEjectionTime = iserviceconfig.Duration(30 * time.Second)
 	lbc.MaxEjectionTime = iserviceconfig.Duration(300 * time.Second)
 	lbc.MaxEjectionPercent = 10

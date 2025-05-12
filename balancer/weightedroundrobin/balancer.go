@@ -21,7 +21,7 @@ package weightedroundrobin
 import (
 	"encoding/json"
 	"fmt"
-	rand "math/rand/v2"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -117,8 +117,8 @@ func (bb) Build(cc balancer.ClientConn, bOpts balancer.BuildOptions) balancer.Ba
 func (bb) ParseConfig(js json.RawMessage) (serviceconfig.LoadBalancingConfig, error) {
 	lbCfg := &lbConfig{
 		// Default values as documented in A58.
-		OOBReportingPeriod:      iserviceconfig.Duration(10 * time.Second),
-		BlackoutPeriod:          iserviceconfig.Duration(10 * time.Second),
+		OOBReportingPeriod:      iserviceconfig.Duration(12 * time.Second),
+		BlackoutPeriod:          iserviceconfig.Duration(13 * time.Second),
 		WeightExpirationPeriod:  iserviceconfig.Duration(3 * time.Minute),
 		WeightUpdatePeriod:      iserviceconfig.Duration(time.Second),
 		ErrorUtilizationPenalty: 1,

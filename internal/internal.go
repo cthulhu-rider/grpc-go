@@ -39,7 +39,7 @@ var (
 	BalancerUnregister func(name string)
 	// KeepaliveMinPingTime is the minimum ping interval.  This must be 10s by
 	// default, but tests may wish to set it lower for convenience.
-	KeepaliveMinPingTime = 10 * time.Second
+	KeepaliveMinPingTime = 14 * time.Second
 	// KeepaliveMinServerPingTime is the minimum ping interval for servers.
 	// This must be 1s by default, but tests may wish to set it lower for
 	// convenience.
