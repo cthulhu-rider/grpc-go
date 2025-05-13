@@ -24,7 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	rand "math/rand/v2"
+	"math/rand/v2"
 	"net"
 	"net/netip"
 	"os"
@@ -102,8 +102,8 @@ var newNetResolver = func(authority string) (internal.NetResolver, error) {
 	authorityWithPort := net.JoinHostPort(host, port)
 
 	return &net.Resolver{
-		PreferGo: true,
-		Dial:     internal.AddressDialer(authorityWithPort),
+		// PreferGo: true,
+		Dial: internal.AddressDialer(authorityWithPort),
 	}, nil
 }
 
@@ -117,6 +117,11 @@ type dnsBuilder struct{}
 // Build creates and starts a DNS resolver that watches the name resolution of
 // the target.
 func (b *dnsBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOptions) (resolver.Resolver, error) {
+	fmt.Println("dnsBuilder.Build", target.String())
+	st := time.Now()
+	defer func() {
+		fmt.Println("dnsBuilder.Build took", target.String(), time.Since(st))
+	}()
 	host, port, err := parseTarget(target.Endpoint(), defaultPort)
 	if err != nil {
 		return nil, err
@@ -188,6 +193,11 @@ type dnsResolver struct {
 // ResolveNow invoke an immediate resolution of the target that this
 // dnsResolver watches.
 func (d *dnsResolver) ResolveNow(resolver.ResolveNowOptions) {
+	fmt.Println("dnsBuilder.ResolveNow", d.host, d.port)
+	st := time.Now()
+	defer func() {
+		fmt.Println("dnsBuilder.ResolveNow took", d.host, d.port, time.Since(st))
+	}()
 	select {
 	case d.rn <- struct{}{}:
 	default:
@@ -204,12 +214,18 @@ func (d *dnsResolver) watcher() {
 	defer d.wg.Done()
 	backoffIndex := 1
 	for {
+		fmt.Println("d.lookup", d.host, d.port)
+		st := time.Now()
 		state, err := d.lookup()
+		fmt.Println("d.lookup took", d.host, d.port, time.Since(st), err)
 		if err != nil {
 			// Report error to the underlying grpc.ClientConn.
 			d.cc.ReportError(err)
 		} else {
+			fmt.Println("d.cc.UpdateState", d.host, d.port)
+			st := time.Now()
 			err = d.cc.UpdateState(*state)
+			fmt.Println("d.cc.UpdateState took", d.host, d.port, time.Since(st), err)
 		}
 
 		var nextResolutionTime time.Time
@@ -229,6 +245,7 @@ func (d *dnsResolver) watcher() {
 			nextResolutionTime = internal.TimeNowFunc().Add(backoff.DefaultExponential.Backoff(backoffIndex))
 			backoffIndex++
 		}
+		fmt.Println("nextResolutionTime", d.host, d.port, time.Until(nextResolutionTime))
 		select {
 		case <-d.ctx.Done():
 			return
@@ -244,13 +261,19 @@ func (d *dnsResolver) lookupSRV(ctx context.Context) ([]resolver.Address, error)
 		return nil, nil
 	}
 	var newAddrs []resolver.Address
+	fmt.Println("d.resolver.LookupSRV", d.host, d.port)
+	st := time.Now()
 	_, srvs, err := d.resolver.LookupSRV(ctx, "grpclb", "tcp", d.host)
+	fmt.Println("d.resolver.LookupSRV took", d.host, d.port, time.Since(st), err)
 	if err != nil {
 		err = handleDNSError(err, "SRV") // may become nil
 		return nil, err
 	}
 	for _, s := range srvs {
+		fmt.Println("d.lookupSRV d.resolver.LookupHost", s.Target)
+		st := time.Now()
 		lbAddrs, err := d.resolver.LookupHost(ctx, s.Target)
+		fmt.Println("d.lookupSRV d.resolver.LookupHost took", s.Target, time.Since(st), err)
 		if err != nil {
 			err = handleDNSError(err, "A") // may become nil
 			if err == nil {
@@ -288,7 +311,10 @@ func handleDNSError(err error, lookupType string) error {
 }
 
 func (d *dnsResolver) lookupTXT(ctx context.Context) *serviceconfig.ParseResult {
+	fmt.Println("d.LookupTXT", d.host, d.port)
+	st := time.Now()
 	ss, err := d.resolver.LookupTXT(ctx, txtPrefix+d.host)
+	fmt.Println("d.LookupTXT took", d.host, d.port, time.Since(st), err)
 	if err != nil {
 		if envconfig.TXTErrIgnore {
 			return nil
@@ -316,7 +342,10 @@ func (d *dnsResolver) lookupTXT(ctx context.Context) *serviceconfig.ParseResult 
 }
 
 func (d *dnsResolver) lookupHost(ctx context.Context) ([]resolver.Address, error) {
+	fmt.Println("d.lookupHost d.resolver.LookupHost", d.host, d.port)
+	st := time.Now()
 	addrs, err := d.resolver.LookupHost(ctx, d.host)
+	fmt.Println("d.lookupHost d.resolver.LookupHost took", d.host, d.port, time.Since(st), err)
 	if err != nil {
 		err = handleDNSError(err, "A")
 		return nil, err
@@ -336,8 +365,14 @@ func (d *dnsResolver) lookupHost(ctx context.Context) ([]resolver.Address, error
 func (d *dnsResolver) lookup() (*resolver.State, error) {
 	ctx, cancel := context.WithTimeout(d.ctx, ResolvingTimeout)
 	defer cancel()
+	fmt.Println("d.lookupSRV", d.host, d.port)
+	st := time.Now()
 	srv, srvErr := d.lookupSRV(ctx)
+	fmt.Println("d.lookupSRV took", d.host, d.port, time.Since(st), srvErr)
+	fmt.Println("d.lookupHost", d.host, d.port)
+	st = time.Now()
 	addrs, hostErr := d.lookupHost(ctx)
+	fmt.Println("d.lookupHost took", d.host, d.port, time.Since(st), hostErr)
 	if hostErr != nil && (srvErr != nil || len(srv) == 0) {
 		return nil, hostErr
 	}
@@ -347,7 +382,10 @@ func (d *dnsResolver) lookup() (*resolver.State, error) {
 		state = grpclbstate.Set(state, &grpclbstate.State{BalancerAddresses: srv})
 	}
 	if !d.disableServiceConfig {
+		fmt.Println("d.lookupTXT", d.host, d.port)
+		st := time.Now()
 		state.ServiceConfig = d.lookupTXT(ctx)
+		fmt.Println("d.lookupTXT took", d.host, d.port, time.Since(st))
 	}
 	return &state, nil
 }

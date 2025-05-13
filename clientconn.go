@@ -129,7 +129,6 @@ func (dcs *defaultConfigSelector) SelectConfig(rpcInfo iresolver.RPCInfo) (*ires
 // WithReturnConnectionError, and FailOnNonTempDialError are ignored by this
 // function.
 func NewClient(target string, opts ...DialOption) (conn *ClientConn, err error) {
-	fmt.Println("CCCCCCCCCCCCCCCCCCCCCCCCCCCC")
 	cc := &ClientConn{
 		target: target,
 		conns:  make(map[*addrConn]struct{}),
@@ -163,6 +162,7 @@ func NewClient(target string, opts ...DialOption) (conn *ClientConn, err error) 
 	if err := cc.initParsedTargetAndResolverBuilder(); err != nil {
 		return nil, err
 	}
+	fmt.Printf("NewClient,initParsedTargetAndResolverBuilder %T\n", cc.resolverBuilder)
 
 	for _, opt := range globalPerTargetDialOptions {
 		opt.DialOptionForTarget(cc.parsedTarget.URL).apply(&cc.dopts)
@@ -678,12 +678,15 @@ func (cc *ClientConn) waitForResolvedAddrs(ctx context.Context) error {
 	// This is on the RPC path, so we use a fast path to avoid the
 	// more-expensive "select" below after the resolver has returned once.
 	if cc.firstResolveEvent.HasFired() {
+		fmt.Println("waitForResolvedAddrs cc.firstResolveEvent.HasFired", cc.target, cc.parsedTarget)
 		return nil
 	}
 	select {
 	case <-cc.firstResolveEvent.Done():
+		fmt.Println("waitForResolvedAddrs cc.firstResolveEvent.Done", cc.target, cc.parsedTarget)
 		return nil
 	case <-ctx.Done():
+		fmt.Println("waitForResolvedAddrs ctx.Done", cc.target, cc.parsedTarget, ctx.Err())
 		return status.FromContextError(ctx.Err()).Err()
 	case <-cc.ctx.Done():
 		return ErrClientConnClosing

@@ -21,9 +21,10 @@ package grpc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
-	rand "math/rand/v2"
+	"math/rand/v2"
 	"strconv"
 	"sync"
 	"time"
@@ -178,6 +179,12 @@ func NewClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, meth
 }
 
 func newClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, method string, opts ...CallOption) (_ ClientStream, err error) {
+	st := time.Now()
+	fmt.Println("newClientStream", method, cc.target, cc.parsedTarget, st)
+	defer func() {
+		fmt.Println("newClientStream took", method, cc.target, cc.parsedTarget, time.Since(st))
+	}()
+
 	// Start tracking the RPC for idleness purposes. This is where a stream is
 	// created for both streaming and unary RPCs, and hence is a good place to
 	// track active RPC count.
@@ -189,6 +196,7 @@ func newClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, meth
 	opts = append([]CallOption{OnFinish(func(error) { cc.idlenessMgr.OnCallEnd() })}, opts...)
 
 	if md, added, ok := metadataFromOutgoingContextRaw(ctx); ok {
+		fmt.Println("newClientStream metadata", method, cc.target, cc.parsedTarget, time.Since(st))
 		// validate md
 		if err := imetadata.Validate(md); err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
@@ -212,18 +220,29 @@ func newClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, meth
 	}
 	// Provide an opportunity for the first RPC to see the first service config
 	// provided by the resolver.
-	if err := cc.waitForResolvedAddrs(ctx); err != nil {
+	fmt.Println("waitForResolvedAddrs", cc.target, cc.parsedTarget, method, time.Since(st))
+	st1 := time.Now()
+	err = cc.waitForResolvedAddrs(ctx)
+	fmt.Println("waitForResolvedAddrs took", cc.target, cc.parsedTarget, method, time.Since(st1))
+	if err != nil {
 		return nil, err
 	}
 
 	var mc serviceconfig.MethodConfig
 	var onCommit func()
 	newStream := func(ctx context.Context, done func()) (iresolver.ClientStream, error) {
-		return newClientStreamWithParams(ctx, desc, cc, method, mc, onCommit, done, opts...)
+		fmt.Println("newClientStreamWithParams", cc.target, cc.parsedTarget, method, time.Since(st))
+		st := time.Now()
+		res, err := newClientStreamWithParams(ctx, desc, cc, method, mc, onCommit, done, opts...)
+		fmt.Println("newClientStreamWithParams took", cc.target, cc.parsedTarget, method, time.Since(st), err)
+		return res, err
 	}
 
 	rpcInfo := iresolver.RPCInfo{Context: ctx, Method: method}
+	fmt.Println("SelectConfig", cc.target, cc.parsedTarget, method, time.Since(st))
+	st1 = time.Now()
 	rpcConfig, err := cc.safeConfigSelector.SelectConfig(rpcInfo)
+	fmt.Println("SelectConfig took", cc.target, cc.parsedTarget, method, time.Since(st1))
 	if err != nil {
 		if st, ok := status.FromError(err); ok {
 			// Restrict the code to the list allowed by gRFC A54.
@@ -245,7 +264,10 @@ func newClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, meth
 			rpcInfo.Context = nil
 			ns := newStream
 			newStream = func(ctx context.Context, done func()) (iresolver.ClientStream, error) {
+				st := time.Now()
+				fmt.Println("rpcConfig.Interceptor.NewStream", method, cc.target, cc.parsedTarget, st)
 				cs, err := rpcConfig.Interceptor.NewStream(ctx, rpcInfo, done, ns)
+				fmt.Println("rpcConfig.Interceptor.NewStream took", cc.target, cc.parsedTarget, method, time.Since(st), err)
 				if err != nil {
 					return nil, toRPCErr(err)
 				}
@@ -258,6 +280,7 @@ func newClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, meth
 }
 
 func newClientStreamWithParams(ctx context.Context, desc *StreamDesc, cc *ClientConn, method string, mc serviceconfig.MethodConfig, onCommit, doneFunc func(), opts ...CallOption) (_ iresolver.ClientStream, err error) {
+	st := time.Now()
 	c := defaultCallInfo()
 	if mc.WaitForReady != nil {
 		c.failFast = !*mc.WaitForReady
@@ -270,6 +293,7 @@ func newClientStreamWithParams(ctx context.Context, desc *StreamDesc, cc *Client
 	// https://github.com/grpc/grpc-go/issues/1818.
 	var cancel context.CancelFunc
 	if mc.Timeout != nil && *mc.Timeout >= 0 {
+		fmt.Println("newClientStreamWithParams method timeout", method, cc.target, cc.parsedTarget, *mc.Timeout)
 		ctx, cancel = context.WithTimeout(ctx, *mc.Timeout)
 	} else {
 		ctx, cancel = context.WithCancel(ctx)
@@ -334,6 +358,7 @@ func newClientStreamWithParams(ctx context.Context, desc *StreamDesc, cc *Client
 		cancel:       cancel,
 		firstAttempt: true,
 		onCommit:     onCommit,
+		st:           st,
 	}
 	if !cc.dopts.disableRetry {
 		cs.retryThrottler = cc.retryThrottler.Load().(*retryThrottler)
@@ -350,10 +375,18 @@ func newClientStreamWithParams(ctx context.Context, desc *StreamDesc, cc *Client
 	// Pick the transport to use and create a new stream on the transport.
 	// Assign cs.attempt upon success.
 	op := func(a *csAttempt) error {
-		if err := a.getTransport(); err != nil {
+		fmt.Println("newClientStreamWithParams getTransport", a.cs.callHdr.Method, cc.target, cc.parsedTarget, "since init", time.Since(cs.st))
+		st := time.Now()
+		err := a.getTransport()
+		fmt.Println("newClientStreamWithParams getTransport took", a.cs.callHdr.Method, cc.target, cc.parsedTarget, time.Since(st), "since init", time.Since(cs.st), err)
+		if err != nil {
 			return err
 		}
-		if err := a.newStream(); err != nil {
+		fmt.Println("newClientStreamWithParams newStream", a.cs.callHdr.Method, cc.target, cc.parsedTarget, "since init", time.Since(cs.st))
+		st = time.Now()
+		err = a.newStream()
+		fmt.Println("newClientStreamWithParams newStream took", a.cs.callHdr.Method, cc.target, cc.parsedTarget, time.Since(st), "since init", time.Since(cs.st), err)
+		if err != nil {
 			return err
 		}
 		// Because this operation is always called either here (while creating
@@ -573,6 +606,8 @@ type clientStream struct {
 	onCommit         func()
 	replayBuffer     []replayOp // operations to replay on retry
 	replayBufferSize int        // current size of replayBuffer
+
+	st time.Time
 }
 
 type replayOp struct {
@@ -717,6 +752,7 @@ func (a *csAttempt) shouldRetry(err error) (bool, error) {
 
 	// TODO(dfawley): we could eagerly fail here if dur puts us past the
 	// deadline, but unsure if it is worth doing.
+	fmt.Println("shouldRetry timer", a.cs.callHdr.Method, dur, "since init", time.Since(a.cs.st))
 	t := time.NewTimer(dur)
 	select {
 	case <-t.C:
@@ -764,7 +800,8 @@ func (cs *clientStream) Context() context.Context {
 
 func (cs *clientStream) withRetry(op func(a *csAttempt) error, onSuccess func()) error {
 	cs.mu.Lock()
-	for {
+	for i := 0; ; i++ {
+		fmt.Println("withRetry iter", cs.callHdr.Method, i, "since init", time.Since(cs.st))
 		if cs.committed {
 			cs.mu.Unlock()
 			// toRPCErr is used in case the error from the attempt comes from
@@ -886,6 +923,8 @@ func (cs *clientStream) bufferForRetryLocked(sz int, op func(a *csAttempt) error
 }
 
 func (cs *clientStream) SendMsg(m any) (err error) {
+	fmt.Println("clientStream.SendMsg", cs.callHdr.Method, "since init", time.Since(cs.st))
+	st := time.Now()
 	defer func() {
 		if err != nil && err != io.EOF {
 			// Call finish on the client stream for errors generated by this SendMsg
@@ -895,6 +934,7 @@ func (cs *clientStream) SendMsg(m any) (err error) {
 			// retried.)
 			cs.finish(err)
 		}
+		fmt.Println("clientStream.SendMsg took", cs.callHdr.Method, time.Since(st), "since init", time.Since(cs.st))
 	}()
 	if cs.sentLast {
 		return status.Errorf(codes.Internal, "SendMsg called after CloseSend")
@@ -929,7 +969,11 @@ func (cs *clientStream) SendMsg(m any) (err error) {
 	// compressed). The original ref will always be freed by the deferred free above.
 	payload.Ref()
 	op := func(a *csAttempt) error {
-		return a.sendMsg(m, hdr, payload, dataLen, payloadLen)
+		fmt.Println("clientStream.sendMsg", a.cs.callHdr.Method, "since init", time.Since(a.cs.st))
+		st := time.Now()
+		err := a.sendMsg(m, hdr, payload, dataLen, payloadLen)
+		fmt.Println("clientStream.sendMsg took", a.cs.callHdr.Method, time.Since(st), "since init", time.Since(a.cs.st), err)
+		return err
 	}
 
 	// onSuccess is invoked when the op is captured for a subsequent retry. If the
@@ -957,6 +1001,11 @@ func (cs *clientStream) SendMsg(m any) (err error) {
 }
 
 func (cs *clientStream) RecvMsg(m any) error {
+	fmt.Println("clientStream.RecvMsg", cs.callHdr.Method, "since init", time.Since(cs.st))
+	st := time.Now()
+	defer func() {
+		fmt.Println("clientStream.RecvMsg took", cs.callHdr.Method, time.Since(st), "since init", time.Since(cs.st))
+	}()
 	if len(cs.binlogs) != 0 && !cs.serverHeaderBinlogged {
 		// Call Header() to binary log header if it's not already logged.
 		cs.Header()
@@ -967,7 +1016,11 @@ func (cs *clientStream) RecvMsg(m any) error {
 		defer recvInfo.free()
 	}
 	err := cs.withRetry(func(a *csAttempt) error {
-		return a.recvMsg(m, recvInfo)
+		fmt.Println("clientStream.recvMsg", a.cs.callHdr.Method, "since init", time.Since(a.cs.st))
+		st := time.Now()
+		err := a.recvMsg(m, recvInfo)
+		fmt.Println("clientStream.recvMsg took", a.cs.callHdr.Method, time.Since(st), "since init", time.Since(a.cs.st), err)
+		return err
 	}, cs.commitAttemptLocked)
 	if len(cs.binlogs) != 0 && err == nil {
 		sm := &binarylog.ServerMessage{

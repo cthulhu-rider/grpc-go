@@ -28,7 +28,7 @@ package googledirectpath
 import (
 	"encoding/json"
 	"fmt"
-	rand "math/rand/v2"
+	"math/rand/v2"
 	"net/url"
 	"sync"
 	"time"
@@ -51,7 +51,7 @@ const (
 	zoneURL                 = "http://metadata.google.internal/computeMetadata/v1/instance/zone"
 	ipv6URL                 = "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ipv6s"
 	ipv6CapableMetadataName = "TRAFFICDIRECTOR_DIRECTPATH_C2P_IPV6_CAPABLE"
-	httpReqTimeout          = 10 * time.Second
+	httpReqTimeout          = 22 * time.Second
 
 	logPrefix        = "[google-c2p-resolver]"
 	dnsName, xdsName = "dns", "xds"
@@ -120,6 +120,11 @@ func getXdsServerURI() string {
 type c2pResolverBuilder struct{}
 
 func (c2pResolverBuilder) Build(t resolver.Target, cc resolver.ClientConn, opts resolver.BuildOptions) (resolver.Resolver, error) {
+	fmt.Println("c2pResolverBuilder.Build", t.String())
+	st := time.Now()
+	defer func() {
+		fmt.Println("c2pResolverBuilder.Build took", t.String(), time.Since(st))
+	}()
 	if t.URL.Host != "" {
 		return nil, fmt.Errorf("google-c2p URI scheme does not support authorities")
 	}

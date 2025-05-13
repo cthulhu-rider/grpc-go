@@ -22,6 +22,8 @@ package passthrough
 
 import (
 	"errors"
+	"fmt"
+	"time"
 
 	"google.golang.org/grpc/resolver"
 )
@@ -31,6 +33,11 @@ const scheme = "passthrough"
 type passthroughBuilder struct{}
 
 func (*passthroughBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOptions) (resolver.Resolver, error) {
+	fmt.Println("passthroughBuilder.Build", target.String())
+	st := time.Now()
+	defer func() {
+		fmt.Println("passthroughBuilder.Build took", target.String(), time.Since(st))
+	}()
 	if target.Endpoint() == "" && opts.Dialer == nil {
 		return nil, errors.New("passthrough: received empty target in Build()")
 	}
